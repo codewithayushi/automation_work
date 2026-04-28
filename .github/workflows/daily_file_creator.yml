@@ -1,0 +1,65 @@
+name: Daily AI Programmer (API Updated)
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch: 
+
+permissions:
+  contents: write
+
+jobs:
+  generate-code:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate AI Program
+        env:
+          GEMINI_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          TIMESTAMP=$(TZ="Asia/Kolkata" date +'%d-%m-%Y_%H-%M-%S')
+          FILENAME="logic_program_${TIMESTAMP}.py"
+          
+          # 1. Payload
+          cat <<EOF > payload.json
+          {
+            "contents": [{
+              "parts":[{"text": "Write a unique, short Python script for a beginner. Provide ONLY the python code and comments, nothing else."}]
+            }]
+          }
+          EOF
+
+          # 2. API Call (Model updated from 1.5-flash to 2.5-flash)
+          RESPONSE=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_KEY" \
+              -H 'Content-Type: application/json' \
+              -d @payload.json)
+
+          # 3. Extract Code
+          AI_CODE=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty')
+
+          if [ -z "$AI_CODE" ] || [ "$AI_CODE" == "null" ]; then
+             echo "# API Error or Safety Filter Blocked this." > "$FILENAME"
+             echo "# Full Response for Debugging:" >> "$FILENAME"
+             echo "'''" >> "$FILENAME"
+             echo "$RESPONSE" >> "$FILENAME"
+             echo "'''" >> "$FILENAME"
+          else
+             echo "$AI_CODE" > "$FILENAME"
+          fi
+
+          # 4. Push to GitHub
+          BASE64_CONTENT=$(cat "$FILENAME" | base64 -w 0)
+          
+          cat <<EOF > github_payload.json
+          {
+            "message": "AI Code for $TIMESTAMP",
+            "content": "$BASE64_CONTENT"
+          }
+          EOF
+
+          curl -s -L \
+            -X PUT \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/${{ github.repository }}/contents/"$FILENAME" \
+            -d @github_payload.json
